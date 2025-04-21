@@ -1,0 +1,205 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+// Looking for ways to speed up your queries, or scale easily with your serverless or edge functions?
+// Try Prisma Accelerate: https://pris.ly/cli/accelerate-init
+
+generator client {
+  provider = "prisma-client-js"
+  previewFeatures = ["fullTextSearchPostgres", "postgresqlExtensions", "multiSchema"]
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+  extensions = [pgcrypto, postgis, pg_trgm]
+  schemas    = ["auth_schema", "election_schema"]
+}
+
+model User {
+  id           Int      @id @default(autoincrement())
+  email      String   @unique @map("email")
+  passwordHash String?  @map("password_hash")
+  role       UserRole? @default(VOTE_COUNTER) @map("role")
+  elections  Election[] @relation("ElectionUser")
+  electionId String?  @map("election_id")
+  createdAt  DateTime @default(now()) @map("created_at")
+  updatedAt  DateTime @updatedAt @map("updated_at")
+
+  googleId String? @unique @map("google_id")
+
+  profile         UserProfile?
+  sessions        Session[]
+
+  @@map("users")
+  @@schema("auth_schema")
+}
+
+model UserProfile {
+  userId    Int      @id @map("user_id")
+  fullName  String   @map("full_name")
+  avatarUrl String?  @map("avatar_url")
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz
+
+  // Relation
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("user_profiles")
+  @@schema("auth_schema")
+}
+
+enum UserRole {
+  ADMIN
+  ELECTION_CONTROLLER
+  VOTE_COUNTER
+
+  @@map("user_roles")
+  @@schema("auth_schema")
+}
+
+model Session {
+  id           String    @id @default(uuid())
+  userId       Int       @map("user_id")
+  expires      DateTime
+  ipAddress    String?   @map("ip_address") @db.VarChar(45)
+  userAgent    String?   @map("user_agent")
+  deviceName   String?   @map("device_name")
+  loginMethod  String    @default("password") @map("login_method")
+  createdAt    DateTime  @default(now()) @map("created_at") @db.Timestamptz
+  lastActiveAt DateTime? @map("last_active_at") @db.Timestamptz
+
+  // Relations
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([expires])
+  @@index([ipAddress])
+  @@map("sessions")
+  @@schema("auth_schema")
+}
+
+
+model Election {
+  id          String     @id @default(uuid()) @map("id")
+  name        String     @map("name")
+  logo        String?    @map("logo")
+  status      ElectionStatus @default(DRAFT) @map("status")
+  totalVoters Int        @map("total_voters")
+  accessCode   String?     @map("access_code") @unique
+  votingCompletion Float? @default(0) @map("voting_completion")
+  userId    Int?       @map("user_id")
+  user      User?      @relation("ElectionUser", fields: [userId], references: [id], onDelete: SetNull)
+  booths      Booth[]
+  parties     Party[]
+  createdAt   DateTime   @default(now()) @map("created_at")
+  updatedAt   DateTime   @updatedAt @map("updated_at")
+
+  @@map("elections")
+  @@schema("election_schema")
+}
+
+enum ElectionStatus {
+  DRAFT
+  ONGOING
+  COMPLETED
+
+  @@map("election_status")
+  @@schema("election_schema")
+}
+
+model Booth {
+  id            String    @id @default(uuid()) @map("id")
+  boothNumber   Int       @map("booth_number")
+  voterCount    Int       @map("voter_count")
+  status BoothStatus @default(PENDING) @map("status")
+  election      Election  @relation(fields: [electionId], references: [id])
+  electionId    String    @map("election_id")
+  totalVotesCounted Int @default(0) @map("total_votes_counted")
+  countingRounds CountingRound[]
+
+  @@map("booths")
+  @@schema("election_schema")
+}
+
+enum BoothStatus {
+  PENDING
+  COUNTING
+  COMPLETED
+
+  @@map("booth_status")
+  @@schema("election_schema")
+}
+
+model Party {
+  id         String     @id @default(uuid()) @map("id")
+  name       String     @map("name")
+  logo       String?    @map("logo")
+  color      String     @map("color")
+  election   Election   @relation(fields: [electionId], references: [id])
+  electionId String     @map("election_id")
+  candidates Candidate[]
+
+  @@map("parties")
+  @@schema("election_schema")
+}
+
+model Candidate {
+  id         String     @id @default(uuid()) @map("id")
+  name       String     @map("name")
+  photo      String?    @map("photo")
+  votes     Int       @default(0) @map("votes")
+  position   CandidatePosition @map("position")
+  party      Party      @relation(fields: [partyId], references: [id])
+  partyId    String     @map("party_id")
+  results    Result[]
+
+  @@map("candidates")
+  @@schema("election_schema")
+}
+
+enum CandidatePosition {
+  PRESIDENT
+  SECRETARY
+  TREASURER
+
+  @@map("candidate_positions")
+  @@schema("election_schema")
+}
+
+model CountingRound {
+  id          String   @id @default(uuid()) @map("id")
+  roundNumber Int      @map("round_number")
+  booth       Booth    @relation(fields: [boothId], references: [id])
+  boothId     String   @map("booth_id")
+  status      RoundStatus @default(DRAFT) @map("status")
+  voteValue   Float    @default(0) @map("vote_value")
+  results     Result[]
+  createdAt   DateTime @default(now()) @map("created_at")
+  countedAt   DateTime @default(now()) @map("counted_at")
+
+  @@map("counting_rounds")
+  @@schema("election_schema")
+}
+
+enum RoundStatus {
+  DRAFT
+  PUBLISHED
+
+  @@map("round_status")
+  @@schema("election_schema")
+}
+
+model Result {
+  id            String        @id @default(uuid()) @map("id")
+  countingRound CountingRound @relation(fields: [roundId], references: [id])
+  roundId       String        @map("round_id")
+  candidate     Candidate     @relation(fields: [candidateId], references: [id])
+  candidateId   String        @map("candidate_id")
+  countedAt DateTime @default(now()) @map("counted_at")
+  voteCount     Int           @map("vote_count")
+
+  @@map("results")
+  @@schema("election_schema")
+}
